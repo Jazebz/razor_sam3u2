@@ -79,6 +79,7 @@ MACROS
 
 #include "configuration.h"
 #include "lcd_bitmaps.h"
+#include "user_app1.h"
 
 /***********************************************************************************************************************
 * Bookmarks
@@ -95,6 +96,10 @@ All Global variable names shall start with "G_<type>Lcd"
 /*--------------------------------------------------------------------------------------------------------------------*/
 /* New variables */
 volatile u8 G_aau8LcdRamImage[U16_LCD_IMAGE_ROWS][U16_LCD_IMAGE_COLUMNS];    /*!< @brief A complete copy of the LCD image in RAM */
+bool isMainScreen = TRUE;
+bool isMenu = FALSE;
+bool isLevelOne = FALSE;
+bool isLevelTwo = FALSE;
 
 /* The following are used commonly when working with text on the screen, so are defined */
 PixelBlockType G_sLcdClearWholeScreen = 
@@ -185,6 +190,16 @@ extern const u8 aau8EngenuicsLogoBlackQ1[U8_LCD_IMAGE_ROW_SIZE_25PX][U8_LCD_IMAG
 extern const u8 aau8EngenuicsLogoBlackQ2[U8_LCD_IMAGE_ROW_SIZE_25PX][U8_LCD_IMAGE_COL_BYTES_25PX]; /*!< @brief From lcd_bitmaps.c */
 extern const u8 aau8EngenuicsLogoBlackQ3[U8_LCD_IMAGE_ROW_SIZE_25PX][U8_LCD_IMAGE_COL_BYTES_25PX]; /*!< @brief From lcd_bitmaps.c */
 extern const u8 aau8EngenuicsLogoBlackQ4[U8_LCD_IMAGE_ROW_SIZE_25PX][U8_LCD_IMAGE_COL_BYTES_25PX]; /*!< @brief From lcd_bitmaps.c */
+extern const u8 aau8Logo[U8_LCD_IMAGE_ROW_SIZE_50PX][U8_LCD_IMAGE_COL_BYTES_50PX]; /*!< @brief From lcd_bitmaps.c */
+extern const u8 aau8Platform[U8_LCD_IMAGE_ROW_SIZE_50PX][7]; /*!< @brief From lcd_bitmaps.c */
+extern const u8 aau8Player[8][2]; /*!< @brief From lcd_bitmaps.c */
+extern const u8 aau8PlayerDel[8][2];
+extern bool buttonOnePressed;
+extern bool buttonTwoPressed;
+extern int playerX;
+extern int velocity;
+extern bool isJumping;
+extern int playerY;
 
 extern volatile fnCode_type G_SspStateMachine;         /*!< @brief From sam3u_ssp.c */
 
@@ -215,7 +230,8 @@ static PixelBlockType Lcd_sUpdateArea;                            /*!< @brief Ar
 static PixelBlockType Lcd_sCurrentUpdateArea;                     /*!< @brief Area of LCD currently being updated */
 
 static u8 Lcd_au8MessageInit[]  = "LCD Ready\r\n";
-static u8 Lcd_au8MessageWelcome[] = "SAM3U2 DOT MATRIX";
+static u8 Lcd_au8MessageWelcome[] = "PRESS BUTTON TO START";
+static u8 Lcd_au8LevelOne[] = "Level One";
                                  
 static  u8 Lcd_au8SetupArray[] = {U8_LCD_BIAS_LOW, U8_LCD_ADC_SELECT_NORMAL, U8_LCD_COMMON_MODE1, U8_LCD_COMMON_MODE0, U8_LCD_DISPLAY_LINE_SETx,
                                   U8_LCD_VOLTAGTE_REG_SETx | U8_SET_BIT0 | U8_SET_BIT2,
@@ -648,6 +664,7 @@ void LcdInitialize(void)
 {
   u8 u8Size;
   PixelBlockType sEngenuicsImage;
+  PixelBlockType sMainLogo;
   PixelAddressType sStringLocation;
   
   /* Start with backlight on */
@@ -707,11 +724,12 @@ void LcdInitialize(void)
 #ifdef LCD_STARTUP_ANIMATION
   /* Divide the Engenuics logo up into 4 equal pieces and put them at the corner of the LCD to 
   ensure that the full range of pixels is being addressed correctly */
+  
   u8 u8RowPosition = 0;
   for(u8 i = 0; i < 40; i++)
   {
     LcdClearPixels(&G_sLcdClearWholeScreen);
-  
+    
     /* Top left */
     sEngenuicsImage.u16RowStart = 0;
     sEngenuicsImage.u16ColumnStart = i;
@@ -733,7 +751,7 @@ void LcdInitialize(void)
     sEngenuicsImage.u16RowStart = U16_LCD_ROWS - 25 - u8RowPosition;
     sEngenuicsImage.u16ColumnStart = U16_LCD_COLUMNS - 25 - i;
     LcdLoadBitmap(&aau8EngenuicsLogoBlackQ4[0][0], &sEngenuicsImage);
-  
+
     LcdManualMode();
        
     /* Adjust the row by one every few iterations */
@@ -746,6 +764,8 @@ void LcdInitialize(void)
         u8RowPosition = 14;
       }
     }
+
+    
   } /*   for(u8 i = 0; i < 40; i++) */
   
 #else /* LCD_STARTUP_ANIMATION */
@@ -759,6 +779,12 @@ void LcdInitialize(void)
   sEngenuicsImage.u16ColumnSize = U8_LCD_IMAGE_COL_SIZE_50PX;
   LcdLoadBitmap(&aau8EngenuicsLogoBlack[0][0], &sEngenuicsImage);
 #endif /* LCD_STARTUP_ANIMATION */
+
+  sMainLogo.u16RowStart = 0;
+  sMainLogo.u16ColumnStart = 39;
+  sMainLogo.u16RowSize = 50;
+  sMainLogo.u16ColumnSize = 50;
+  LcdLoadBitmap(&aau8Logo[0][0], &sMainLogo);
 
   /* Write the board string in the middle */
   sStringLocation.u16PixelColumnAddress = 
@@ -790,9 +816,59 @@ Promises:
 - Calls the function to pointed by the state machine function pointer
 
 */
+int oldY = 0;
+
 void LcdRunActiveState(void)
 {
+  static PixelAddressType sLevelLocation;
+  static PixelBlockType sLevel1Platform;
+  static PixelBlockType sPlayer;
+  static PixelBlockType sPlayerDel;  
   Lcd_pfnStateMachine();
+  if(isMainScreen && buttonOnePressed) {
+    for (int i = 0; i < 12; i++) {
+      LcdClearPixels(&G_sLcdClearWholeScreen);
+      isMainScreen = FALSE;
+      isLevelOne = TRUE;
+
+      sLevelLocation.u16PixelColumnAddress = 
+      U16_LCD_LEFT_MOST_COLUMN;
+      sLevelLocation.u16PixelRowAddress = U8_LCD_SMALL_FONT_LINE0;
+      LcdLoadString(Lcd_au8LevelOne, LCD_FONT_SMALL, &sLevelLocation);
+
+      
+      sLevel1Platform.u16RowStart = 60;
+      sLevel1Platform.u16ColumnStart = 0;
+      sLevel1Platform.u16RowSize = 50;
+      sLevel1Platform.u16ColumnSize = 50;
+      LcdLoadBitmap(&aau8Platform[0][0], &sLevel1Platform);
+      sLevel1Platform.u16ColumnStart = 50;
+      LcdLoadBitmap(&aau8Platform[0][0], &sLevel1Platform);
+      
+      
+      sPlayer.u16RowStart = 48;
+      sPlayer.u16ColumnStart = 64;
+      sPlayer.u16RowSize = 12;
+      sPlayer.u16ColumnSize = 6;
+      LcdLoadBitmap(&aau8Player[0][0], &sPlayer);
+
+      sPlayerDel.u16RowStart = 48;
+      sPlayerDel.u16ColumnStart = 64;
+      sPlayerDel.u16RowSize = 12;
+      sPlayerDel.u16ColumnSize = 6;
+      LcdLoadBitmap(&aau8PlayerDel[0][0], &sPlayerDel);
+    }
+
+
+  }
+  //Update from user
+  sPlayerDel.u16RowStart = sPlayer.u16RowStart;
+  sPlayerDel.u16ColumnStart = sPlayer.u16ColumnStart;
+  LcdLoadBitmap(&aau8PlayerDel[0][0], &sPlayerDel);
+  sPlayer.u16RowStart = playerY;
+  sPlayer.u16ColumnStart = playerX;
+  LcdLoadBitmap(&aau8Player[0][0], &sPlayer);
+
 
 } /* end LcdRunActiveState */
 
